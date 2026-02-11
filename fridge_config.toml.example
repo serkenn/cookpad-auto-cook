@@ -1,0 +1,30 @@
+# 冷蔵庫スマート献立 設定ファイル
+# このファイルを fridge_config.toml にコピーして編集してください
+
+[camera]
+indices = [0, 1]           # USBカメラのインデックス
+save_dir = "/tmp/fridge"   # 画像保存先
+
+[vision]
+backend = "claude"         # "claude" | "gemini" | "ai_hat"
+min_confidence = 0.5       # 食材検出の最低信頼度
+
+[vision.claude]
+api_key = ""               # 空の場合は ANTHROPIC_API_KEY 環境変数を使用
+model = "claude-sonnet-4-5-20250929"
+
+[vision.gemini]
+api_key = ""               # 空の場合は GEMINI_API_KEY 環境変数を使用
+model = "gemini-2.0-flash"
+
+[vision.ai_hat]
+model_path = "/usr/share/hailo-models/yolov8s.hef"
+
+[planner]
+meals_per_day = 3          # 1日の食事数 (1〜3)
+recipes_per_meal = 3       # 1食あたりのレシピ数 (主菜1 + 副菜)
+
+[cookpad]
+# token = "..."            # Cookpad APIトークン (オプショナル)
+country = "JP"
+language = "ja"

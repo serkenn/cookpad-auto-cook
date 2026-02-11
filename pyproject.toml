@@ -25,6 +25,15 @@ classifiers = [
 ]
 dependencies = ["httpx>=0.27"]
 
+[project.optional-dependencies]
+fridge = ["opencv-python>=4.8", "tomli>=2.0; python_version<'3.11'"]
+claude = ["opencv-python>=4.8", "tomli>=2.0; python_version<'3.11'", "anthropic>=0.40"]
+gemini = ["opencv-python>=4.8", "tomli>=2.0; python_version<'3.11'", "google-generativeai>=0.8"]
+ai-hat = ["opencv-python>=4.8", "tomli>=2.0; python_version<'3.11'", "hailort>=4.18"]
+
+[project.scripts]
+cookpad-fridge = "cookpad.fridge.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/EdamAme-x/cookpad-py"
 Repository = "https://github.com/EdamAme-x/cookpad-py"
