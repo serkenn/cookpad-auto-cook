@@ -46,7 +46,8 @@ client = Cookpad()
 
 # カスタム
 client = Cookpad(
-    token="your_token",
+    # 基本的には要りません
+    # token="your_token",
     country="JP",
     language="ja",
     user_agent="custom-ua/1.0",
