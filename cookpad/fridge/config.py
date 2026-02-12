@@ -52,6 +52,33 @@ class VisionConfig:
 class PlannerConfig:
     meals_per_day: int = 3
     recipes_per_meal: int = 3
+    storage_locations: dict[str, str] = field(default_factory=lambda: {
+        "野菜": "野菜室",
+        "果物": "野菜室",
+        "肉": "チルド室",
+        "魚": "チルド室",
+        "乳製品": "チルド室",
+        "豆腐・大豆": "チルド室",
+        "卵": "ドアポケット",
+        "調味料": "ドアポケット",
+        "飲料": "ドアポケット",
+        "穀物": "冷蔵室",
+        "その他": "冷蔵室",
+    })
+
+
+@dataclass
+class PrinterConfig:
+    enabled: bool = False
+    printer_name: str = ""
+
+
+@dataclass
+class GDriveConfig:
+    enabled: bool = False
+    credentials_path: str = "~/.config/cookpad/gdrive_credentials.json"
+    token_path: str = "~/.config/cookpad/gdrive_token.json"
+    folder_id: str = ""
 
 
 @dataclass
@@ -67,6 +94,8 @@ class FridgeConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     planner: PlannerConfig = field(default_factory=PlannerConfig)
     cookpad: CookpadConfig = field(default_factory=CookpadConfig)
+    printer: PrinterConfig = field(default_factory=PrinterConfig)
+    gdrive: GDriveConfig = field(default_factory=GDriveConfig)
 
 
 def load_config(path: str | Path | None = None) -> FridgeConfig:
@@ -91,6 +120,8 @@ def load_config(path: str | Path | None = None) -> FridgeConfig:
     vis = raw.get("vision", {})
     pln = raw.get("planner", {})
     cpd = raw.get("cookpad", {})
+    prn = raw.get("printer", {})
+    gdr = raw.get("gdrive", {})
 
     claude_cfg = vis.get("claude", {})
     gemini_cfg = vis.get("gemini", {})
@@ -103,6 +134,11 @@ def load_config(path: str | Path | None = None) -> FridgeConfig:
     gemini_api_key = gemini_cfg.get("api_key", "") or os.environ.get(
         "GEMINI_API_KEY", ""
     )
+
+    # Merge custom storage_locations with defaults
+    default_locations = PlannerConfig().storage_locations
+    custom_locations = pln.get("storage_locations", {})
+    storage_locations = {**default_locations, **custom_locations}
 
     return FridgeConfig(
         camera=CameraConfig(
@@ -129,10 +165,27 @@ def load_config(path: str | Path | None = None) -> FridgeConfig:
         planner=PlannerConfig(
             meals_per_day=pln.get("meals_per_day", 3),
             recipes_per_meal=pln.get("recipes_per_meal", 3),
+            storage_locations=storage_locations,
         ),
         cookpad=CookpadConfig(
             token=cpd.get("token", ""),
             country=cpd.get("country", "JP"),
             language=cpd.get("language", "ja"),
+        ),
+        printer=PrinterConfig(
+            enabled=prn.get("enabled", False),
+            printer_name=prn.get("printer_name", ""),
+        ),
+        gdrive=GDriveConfig(
+            enabled=gdr.get("enabled", False),
+            credentials_path=gdr.get(
+                "credentials_path",
+                "~/.config/cookpad/gdrive_credentials.json",
+            ),
+            token_path=gdr.get(
+                "token_path",
+                "~/.config/cookpad/gdrive_token.json",
+            ),
+            folder_id=gdr.get("folder_id", ""),
         ),
     )

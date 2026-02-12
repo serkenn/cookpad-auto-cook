@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import date
 
 from ..client import Cookpad
-from ..types import Recipe
+from ..types import Ingredient, Recipe
 from .vision import DetectedIngredient
 
 _MEAL_TYPES = [
@@ -22,6 +23,73 @@ _MEAL_QUERIES: dict[str, list[str]] = {
     "dinner": ["晩ごはん", "メイン", "煮物", "定食"],
 }
 
+DEFAULT_STORAGE_LOCATIONS: dict[str, str] = {
+    "野菜": "野菜室",
+    "果物": "野菜室",
+    "肉": "チルド室",
+    "魚": "チルド室",
+    "乳製品": "チルド室",
+    "豆腐・大豆": "チルド室",
+    "卵": "ドアポケット",
+    "調味料": "ドアポケット",
+    "飲料": "ドアポケット",
+    "穀物": "冷蔵室",
+    "その他": "冷蔵室",
+}
+
+# Keyword → category mapping for guessing ingredient categories
+_CATEGORY_KEYWORDS: dict[str, list[str]] = {
+    "肉": [
+        "鶏", "豚", "牛", "肉", "ハム", "ベーコン", "ソーセージ", "ウインナー",
+        "ひき肉", "ミンチ", "もも", "むね", "ささみ", "手羽",
+    ],
+    "魚": [
+        "鮭", "サーモン", "まぐろ", "ツナ", "さば", "いわし", "えび", "海老",
+        "いか", "たこ", "かに", "しらす", "ちくわ", "かまぼこ", "魚",
+    ],
+    "野菜": [
+        "トマト", "きゅうり", "なす", "ピーマン", "にんじん", "人参",
+        "たまねぎ", "玉ねぎ", "じゃがいも", "キャベツ", "レタス", "ほうれん草",
+        "小松菜", "ブロッコリー", "もやし", "大根", "白菜", "ねぎ", "長ねぎ",
+        "にんにく", "しょうが", "生姜", "セロリ", "アスパラ", "かぼちゃ",
+        "さつまいも", "れんこん", "ごぼう", "オクラ", "ズッキーニ", "パプリカ",
+    ],
+    "果物": [
+        "りんご", "バナナ", "みかん", "レモン", "いちご", "ぶどう", "桃", "梨",
+        "キウイ", "オレンジ", "グレープフルーツ", "柿", "メロン", "すいか",
+    ],
+    "卵": ["卵", "たまご", "玉子"],
+    "乳製品": [
+        "牛乳", "ミルク", "チーズ", "バター", "ヨーグルト", "生クリーム",
+        "マーガリン", "クリーム",
+    ],
+    "豆腐・大豆": [
+        "豆腐", "納豆", "油揚げ", "厚揚げ", "味噌", "みそ", "大豆", "豆乳",
+        "がんもどき",
+    ],
+    "調味料": [
+        "醤油", "しょうゆ", "塩", "砂糖", "酢", "みりん", "酒", "料理酒",
+        "ケチャップ", "マヨネーズ", "ソース", "ポン酢", "めんつゆ", "だし",
+        "コンソメ", "鶏ガラ", "オリーブオイル", "サラダ油", "ごま油",
+        "こしょう", "胡椒", "片栗粉", "小麦粉", "パン粉",
+    ],
+    "飲料": ["ジュース", "お茶", "コーヒー", "ビール", "ワイン", "水"],
+    "穀物": [
+        "米", "ご飯", "パン", "パスタ", "うどん", "そば", "そうめん",
+        "ラーメン", "もち", "餅", "シリアル",
+    ],
+}
+
+
+@dataclass
+class AnnotatedIngredient:
+    """Recipe ingredient annotated with storage location and fridge availability."""
+
+    name: str
+    quantity: str
+    storage_location: str  # "野菜室", "チルド室", "ドアポケット" etc.
+    available_in_fridge: bool  # True if detected by vision
+
 
 @dataclass
 class Meal:
@@ -29,6 +97,10 @@ class Meal:
     meal_type_ja: str  # "朝食" | "昼食" | "夕食"
     main_dish: Recipe
     side_dishes: list[Recipe] = field(default_factory=list)
+    main_dish_ingredients: list[AnnotatedIngredient] = field(default_factory=list)
+    side_dish_ingredients: list[list[AnnotatedIngredient]] = field(
+        default_factory=list
+    )
 
 
 @dataclass
@@ -36,6 +108,22 @@ class DailyMealPlan:
     date: str
     detected_ingredients: list[str]
     meals: list[Meal] = field(default_factory=list)
+
+    def shopping_list(self) -> list[AnnotatedIngredient]:
+        """Return deduplicated list of ingredients that need to be purchased."""
+        seen: set[str] = set()
+        result: list[AnnotatedIngredient] = []
+        for meal in self.meals:
+            for ing in meal.main_dish_ingredients:
+                if not ing.available_in_fridge and ing.name not in seen:
+                    seen.add(ing.name)
+                    result.append(ing)
+            for side_ings in meal.side_dish_ingredients:
+                for ing in side_ings:
+                    if not ing.available_in_fridge and ing.name not in seen:
+                        seen.add(ing.name)
+                        result.append(ing)
+        return result
 
     def display(self) -> str:
         """Format meal plan for terminal display."""
@@ -45,24 +133,165 @@ class DailyMealPlan:
         lines.append("")
 
         for meal in self.meals:
-            lines.append(f"{'─' * 40}")
+            lines.append(f"{'─' * 50}")
             lines.append(f"🍽  {meal.meal_type_ja}")
+            lines.append("")
+
+            # Main dish
             lines.append(f"  【主菜】{meal.main_dish.title}")
             if meal.main_dish.cooking_time:
                 lines.append(f"         調理時間: {meal.main_dish.cooking_time}")
+            if meal.main_dish.serving:
+                lines.append(f"         分量: {meal.main_dish.serving}")
+
+            # Main dish ingredients table
+            if meal.main_dish_ingredients:
+                lines.append("")
+                lines.append(
+                    f"    {'食材名':<10} {'分量':<10} {'保存場所':<8} {'状態'}"
+                )
+                lines.append(f"    {'─' * 44}")
+                for ing in meal.main_dish_ingredients:
+                    status = (
+                        "✓ 冷蔵庫にあり" if ing.available_in_fridge else "要購入"
+                    )
+                    lines.append(
+                        f"    {ing.name:<10} {ing.quantity:<10} "
+                        f"{ing.storage_location:<8} {status}"
+                    )
+
+            # Main dish steps
+            if meal.main_dish.steps:
+                lines.append("")
+                lines.append("    手順:")
+                for j, step in enumerate(meal.main_dish.steps, 1):
+                    lines.append(f"      {j}. {step.description}")
+
+            # Side dishes
             for i, side in enumerate(meal.side_dishes, 1):
+                lines.append("")
                 lines.append(f"  【副菜{i}】{side.title}")
+                if side.cooking_time:
+                    lines.append(f"         調理時間: {side.cooking_time}")
+
+                if i - 1 < len(meal.side_dish_ingredients):
+                    side_ings = meal.side_dish_ingredients[i - 1]
+                    if side_ings:
+                        lines.append("")
+                        lines.append(
+                            f"    {'食材名':<10} {'分量':<10} "
+                            f"{'保存場所':<8} {'状態'}"
+                        )
+                        lines.append(f"    {'─' * 44}")
+                        for ing in side_ings:
+                            status = (
+                                "✓ 冷蔵庫にあり"
+                                if ing.available_in_fridge
+                                else "要購入"
+                            )
+                            lines.append(
+                                f"    {ing.name:<10} {ing.quantity:<10} "
+                                f"{ing.storage_location:<8} {status}"
+                            )
+
+                if side.steps:
+                    lines.append("")
+                    lines.append("    手順:")
+                    for j, step in enumerate(side.steps, 1):
+                        lines.append(f"      {j}. {step.description}")
+
+            lines.append("")
+
+        # Shopping list
+        shopping = self.shopping_list()
+        if shopping:
+            lines.append(f"{'─' * 50}")
+            lines.append("🛒 買い物リスト")
+            lines.append("")
+            lines.append(f"    {'食材名':<10} {'分量':<10} {'保存場所'}")
+            lines.append(f"    {'─' * 30}")
+            for ing in shopping:
+                lines.append(
+                    f"    {ing.name:<10} {ing.quantity:<10} {ing.storage_location}"
+                )
             lines.append("")
 
         return "\n".join(lines)
 
 
+def _guess_category(ingredient_name: str) -> str:
+    """Guess ingredient category from its name using keyword matching."""
+    for category, keywords in _CATEGORY_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in ingredient_name:
+                return category
+    return "その他"
+
+
+def _match_ingredient(name: str, detected_names: list[str]) -> bool:
+    """Check if an ingredient name matches any detected fridge ingredient.
+
+    Uses substring matching plus character-set containment for Japanese
+    ingredient names (e.g. "鶏肉" matches "鶏もも肉").
+    """
+    for detected in detected_names:
+        # Direct substring match
+        if detected in name or name in detected:
+            return True
+        # Character-set containment: all chars of the shorter name
+        # appear in the longer name (handles 鶏肉 ↔ 鶏もも肉 etc.)
+        shorter, longer = (detected, name) if len(detected) <= len(name) else (name, detected)
+        if len(shorter) >= 2 and set(shorter).issubset(set(longer)):
+            return True
+    return False
+
+
+def annotate_ingredients(
+    recipe: Recipe,
+    detected_names: list[str],
+    storage_locations: dict[str, str] | None = None,
+) -> list[AnnotatedIngredient]:
+    """Annotate recipe ingredients with storage locations and availability."""
+    locations = storage_locations or DEFAULT_STORAGE_LOCATIONS
+    result: list[AnnotatedIngredient] = []
+    for ing in recipe.ingredients:
+        if ing.headline:
+            continue
+        category = _guess_category(ing.name)
+        location = locations.get(category, "冷蔵室")
+        available = _match_ingredient(ing.name, detected_names)
+        result.append(
+            AnnotatedIngredient(
+                name=ing.name,
+                quantity=ing.quantity,
+                storage_location=location,
+                available_in_fridge=available,
+            )
+        )
+    return result
+
+
+async def _enrich_recipe(client: Cookpad, recipe: Recipe) -> Recipe:
+    """Fetch full recipe detail if ingredients/steps are missing."""
+    if recipe.ingredients and recipe.steps:
+        return recipe
+    try:
+        return await client.get_recipe(recipe.id)
+    except Exception:
+        return recipe
+
+
 class MealPlanner:
     """Plan daily meals from detected fridge ingredients using Cookpad."""
 
-    def __init__(self, cookpad: Cookpad | None = None) -> None:
+    def __init__(
+        self,
+        cookpad: Cookpad | None = None,
+        storage_locations: dict[str, str] | None = None,
+    ) -> None:
         self._cookpad = cookpad
         self._owns_client = cookpad is None
+        self._storage_locations = storage_locations
 
     async def plan_daily(
         self,
@@ -105,12 +334,33 @@ class MealPlanner:
                     for s in sides:
                         used_recipe_ids.add(s.id)
 
+                    # Enrich all recipes with full details in parallel
+                    enrich_tasks = [_enrich_recipe(client, main_dish)] + [
+                        _enrich_recipe(client, s) for s in sides
+                    ]
+                    enriched = await asyncio.gather(*enrich_tasks)
+                    main_dish = enriched[0]
+                    sides = list(enriched[1:])
+
+                    # Annotate ingredients
+                    main_ings = annotate_ingredients(
+                        main_dish, ingredient_names, self._storage_locations
+                    )
+                    side_ings = [
+                        annotate_ingredients(
+                            s, ingredient_names, self._storage_locations
+                        )
+                        for s in sides
+                    ]
+
                     meals.append(
                         Meal(
                             meal_type=meal_type,
                             meal_type_ja=meal_type_ja,
                             main_dish=main_dish,
                             side_dishes=sides,
+                            main_dish_ingredients=main_ings,
+                            side_dish_ingredients=side_ings,
                         )
                     )
         finally:

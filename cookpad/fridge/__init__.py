@@ -1,8 +1,13 @@
 """Smart fridge meal planning module for Cookpad."""
 
 from .camera import CameraCapture, FridgeCamera
-from .config import FridgeConfig, load_config
-from .planner import DailyMealPlan, Meal, MealPlanner
+from .config import (
+    FridgeConfig,
+    GDriveConfig,
+    PrinterConfig,
+    load_config,
+)
+from .planner import AnnotatedIngredient, DailyMealPlan, Meal, MealPlanner
 from .vision import DetectedIngredient, VisionBackend, create_backend
 
 __all__ = [
@@ -14,6 +19,9 @@ __all__ = [
     "MealPlanner",
     "DailyMealPlan",
     "Meal",
+    "AnnotatedIngredient",
     "FridgeConfig",
+    "PrinterConfig",
+    "GDriveConfig",
     "load_config",
 ]

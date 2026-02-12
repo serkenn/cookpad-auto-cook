@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 from .camera import FridgeCamera
@@ -32,6 +33,9 @@ def main(argv: list[str] | None = None) -> None:
     # cameras
     sub.add_parser("cameras", help="利用可能なカメラ一覧を表示")
 
+    # printers
+    sub.add_parser("printers", help="利用可能なプリンタ一覧を表示")
+
     # scan
     scan_parser = sub.add_parser("scan", help="撮影して食材を検出")
     scan_parser.add_argument(
@@ -45,6 +49,26 @@ def main(argv: list[str] | None = None) -> None:
         "--image", type=str, nargs="+", help="既存の画像ファイルを使用"
     )
     plan_parser.add_argument("--json", action="store_true", help="JSON形式で出力")
+    plan_parser.add_argument(
+        "--pdf", type=str, default=None, metavar="FILE",
+        help="PDF ファイルに出力",
+    )
+    plan_parser.add_argument(
+        "--print", action="store_true", dest="do_print",
+        help="デフォルトプリンタで印刷",
+    )
+    plan_parser.add_argument(
+        "--printer", type=str, default=None,
+        help="指定プリンタで印刷",
+    )
+    plan_parser.add_argument(
+        "--drive", action="store_true",
+        help="Google Drive にアップロード",
+    )
+    plan_parser.add_argument(
+        "--drive-folder", type=str, default=None,
+        help="Google Drive のフォルダ ID",
+    )
 
     args = parser.parse_args(argv)
 
@@ -57,6 +81,8 @@ def main(argv: list[str] | None = None) -> None:
     match args.command:
         case "cameras":
             _cmd_cameras()
+        case "printers":
+            _cmd_printers()
         case "scan":
             asyncio.run(_cmd_scan(config, args))
         case "plan":
@@ -71,6 +97,24 @@ def _cmd_cameras() -> None:
     print(f"利用可能なカメラ: {len(cameras)} 台")
     for idx in cameras:
         print(f"  カメラ {idx}")
+
+
+def _cmd_printers() -> None:
+    from .printer import Printer
+
+    try:
+        printers = Printer.list_printers()
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    if not printers:
+        print("利用可能なプリンタが見つかりませんでした。")
+        return
+    print(f"利用可能なプリンタ: {len(printers)} 台")
+    for p in printers:
+        default_mark = " (デフォルト)" if p.is_default else ""
+        print(f"  {p.name}{default_mark}")
 
 
 async def _cmd_scan(config, args) -> None:
@@ -150,7 +194,10 @@ async def _cmd_plan(config, args) -> None:
         client_kwargs["token"] = config.cookpad.token
 
     async with Cookpad(**client_kwargs) as client:
-        planner = MealPlanner(cookpad=client)
+        planner = MealPlanner(
+            cookpad=client,
+            storage_locations=config.planner.storage_locations,
+        )
         print("🍳 献立を作成中...")
         plan = await planner.plan_daily(
             reliable, meals_count=config.planner.meals_per_day
@@ -185,3 +232,62 @@ async def _cmd_plan(config, args) -> None:
     else:
         print()
         print(plan.display())
+
+    # PDF / Print / Drive pipeline
+    needs_pdf = args.pdf or args.do_print or args.printer or args.drive
+    if not needs_pdf:
+        return
+
+    # Determine PDF output path
+    if args.pdf:
+        pdf_path = Path(args.pdf)
+    else:
+        pdf_path = Path(tempfile.mktemp(suffix=".pdf", prefix="kondate_"))
+
+    # Generate PDF
+    from .pdf import generate_pdf
+
+    print("📄 PDF を生成中...")
+    try:
+        generate_pdf(plan, pdf_path)
+        print(f"   PDF 保存: {pdf_path}")
+    except (ImportError, FileNotFoundError) as e:
+        print(f"PDF 生成エラー: {e}", file=sys.stderr)
+        return
+
+    # Print
+    if args.do_print or args.printer:
+        from .printer import Printer
+
+        printer_name = args.printer
+        print("🖨  印刷中...")
+        try:
+            Printer.print_file(pdf_path, printer_name=printer_name)
+            target = printer_name or "デフォルトプリンタ"
+            print(f"   印刷ジョブ送信: {target}")
+        except RuntimeError as e:
+            print(f"印刷エラー: {e}", file=sys.stderr)
+
+    # Google Drive upload
+    if args.drive:
+        from .gdrive import GoogleDriveUploader
+
+        print("☁  Google Drive にアップロード中...")
+        try:
+            uploader = GoogleDriveUploader(
+                credentials_path=config.gdrive.credentials_path,
+                token_path=config.gdrive.token_path,
+                folder_id=config.gdrive.folder_id,
+            )
+            folder_id = args.drive_folder or config.gdrive.folder_id or None
+            filename = f"{plan.date} の献立.pdf"
+            file_id = uploader.upload(
+                pdf_path, filename=filename, folder_id=folder_id
+            )
+            print(f"   アップロード完了 (File ID: {file_id})")
+        except (ImportError, FileNotFoundError) as e:
+            print(f"Google Drive エラー: {e}", file=sys.stderr)
+
+    # Clean up temp PDF if not explicitly requested
+    if not args.pdf and pdf_path.exists():
+        pdf_path.unlink()

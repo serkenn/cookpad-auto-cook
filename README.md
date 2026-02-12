@@ -15,6 +15,10 @@ pip install cookpad
 pip install cookpad[claude]    # Claude Vision
 pip install cookpad[gemini]    # Gemini Vision
 pip install cookpad[ai-hat]    # Raspberry Pi AI HAT (オフライン)
+
+# オプション機能
+pip install cookpad[pdf]       # PDF 献立表出力
+pip install cookpad[gdrive]    # Google Drive アップロード
 ```
 
 ## 使い方
@@ -189,21 +193,27 @@ except CookpadError as e:
 ## 冷蔵庫スマート献立 (`cookpad.fridge`)
 
 冷蔵庫に USB カメラを設置し、AI 画像認識で食材を検出して 1 日 3 食の献立を自動提案する。
+各レシピの材料・手順を取得し、冷蔵庫にある食材と要購入食材を判別。PDF 出力・印刷・Google Drive アップロードにも対応。
 
 ### アーキテクチャ
 
 ```
-USB カメラ → 撮影 → AI Vision で食材検出 → Cookpad 検索 → 献立提案
-              │           │                       │
-          camera.py   vision/              planner.py
-                    (claude / gemini / ai_hat)
+USB カメラ → 撮影 → AI Vision で食材検出 → Cookpad 検索 → レシピ詳細取得 → 献立表
+              │           │                       │               │
+          camera.py   vision/              planner.py         planner.py
+                    (claude / gemini / ai_hat)        (材料アノテーション)
+                                                            │
+                                              ┌─────────────┼─────────────┐
+                                              ↓             ↓             ↓
+                                           pdf.py      printer.py    gdrive.py
+                                          (PDF生成)     (lpr印刷)   (Drive保存)
 ```
 
 ### クイックスタート
 
 ```bash
-# インストール (Claude Vision を使う場合)
-pip install cookpad[claude]
+# インストール (Claude Vision + PDF 出力を使う場合)
+pip install cookpad[claude,pdf]
 
 # 設定ファイルを作成
 cp fridge_config.toml.example fridge_config.toml
@@ -216,6 +226,9 @@ cp fridge_config.toml.example fridge_config.toml
 # 利用可能なカメラ一覧
 cookpad-fridge cameras
 
+# 利用可能なプリンタ一覧
+cookpad-fridge printers
+
 # 撮影して食材を検出
 cookpad-fridge scan
 cookpad-fridge scan --image 冷蔵庫.jpg     # 既存画像を使う
@@ -223,7 +236,17 @@ cookpad-fridge scan --image 冷蔵庫.jpg     # 既存画像を使う
 # 撮影 → 検出 → 献立提案 (フルパイプライン)
 cookpad-fridge plan
 cookpad-fridge plan --image 冷蔵庫.jpg
-cookpad-fridge plan --image 冷蔵庫.jpg --json  # JSON 出力
+
+# 出力オプション
+cookpad-fridge plan --json                        # JSON 出力
+cookpad-fridge plan --pdf 献立.pdf                # PDF ファイルに保存
+cookpad-fridge plan --print                       # デフォルトプリンタで印刷
+cookpad-fridge plan --printer "Brother_HL"        # 指定プリンタで印刷
+cookpad-fridge plan --drive                       # Google Drive にアップロード
+cookpad-fridge plan --drive --drive-folder ID     # 指定フォルダにアップロード
+
+# 組み合わせ可能
+cookpad-fridge plan --image 冷蔵庫.jpg --pdf 献立.pdf --print --drive
 
 # 設定ファイルを指定
 cookpad-fridge --config my_config.toml plan
@@ -235,25 +258,97 @@ cookpad-fridge --config my_config.toml plan
 📅 2025-01-15 の献立
 🥬 検出食材: トマト, 鶏肉, たまねぎ, 卵, にんじん
 
-────────────────────────────────────────
+──────────────────────────────────────────────────
 🍽  朝食
+
   【主菜】ふわふわスクランブルエッグ
          調理時間: 10分
+         分量: 2人分
+
+    食材名     分量       保存場所 状態
+    ────────────────────────────────────────────
+    卵         3個        ドアポケット ✓ 冷蔵庫にあり
+    牛乳       大さじ2    チルド室 要購入
+    バター     10g        チルド室 要購入
+    塩         少々       ドアポケット 要購入
+
+    手順:
+      1. 卵をボウルに割り入れ、牛乳と塩を加えて混ぜる
+      2. フライパンにバターを溶かし、中火で卵液を流し入れる
+      3. 大きくかき混ぜ、半熟で火を止める
+
   【副菜1】トマトサラダ
 
-────────────────────────────────────────
-🍽  昼食
-  【主菜】鶏肉とたまねぎの親子丼
-         調理時間: 20分
-  【副菜1】にんじんしりしり
-
-────────────────────────────────────────
+──────────────────────────────────────────────────
 🍽  夕食
+
   【主菜】チキンのトマト煮込み
          調理時間: 40分
-  【副菜1】たまねぎスープ
-  【副菜2】にんじんグラッセ
+  ...
+
+──────────────────────────────────────────────────
+🛒 買い物リスト
+
+    食材名     分量       保存場所
+    ──────────────────────────────
+    牛乳       大さじ2    チルド室
+    バター     10g        チルド室
+    塩         少々       ドアポケット
 ```
+
+### PDF 出力
+
+`--pdf` で献立表を PDF ファイルに保存できる。A4 レイアウトで材料テーブル・手順・買い物リスト付き。
+
+```bash
+pip install cookpad[pdf]  # reportlab が必要
+
+cookpad-fridge plan --pdf 献立.pdf
+```
+
+日本語フォント (`fonts-noto-cjk` など) が必要:
+
+```bash
+# Ubuntu/Debian
+sudo apt install fonts-noto-cjk
+
+# Fedora/RHEL
+sudo dnf install google-noto-sans-cjk-ttc-fonts
+```
+
+### 印刷
+
+`--print` / `--printer` で PDF を自動印刷。CUPS の `lpr` コマンドを使用。
+
+```bash
+# デフォルトプリンタで印刷
+cookpad-fridge plan --print
+
+# プリンタを指定
+cookpad-fridge plan --printer "Brother_HL"
+
+# プリンタ一覧を確認
+cookpad-fridge printers
+```
+
+### Google Drive アップロード
+
+`--drive` で献立 PDF を Google Drive に自動保存。
+
+```bash
+pip install cookpad[gdrive]  # google-auth-oauthlib, google-api-python-client が必要
+
+cookpad-fridge plan --drive
+cookpad-fridge plan --drive --drive-folder "フォルダID"
+```
+
+**初回セットアップ:**
+
+1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを作成
+2. Google Drive API を有効化
+3. OAuth 2.0 クライアント ID を作成 (デスクトップアプリ)
+4. クレデンシャル JSON を `~/.config/cookpad/gdrive_credentials.json` に保存
+5. 初回実行時にブラウザで認証 (トークンは自動保存)
 
 ### Python API
 
@@ -285,11 +380,31 @@ async def main():
     for ing in ingredients:
         print(f"{ing.name} ({ing.confidence:.0%}) [{ing.category}]")
 
-    # 3. 献立提案
+    # 3. 献立提案 (レシピ詳細・材料アノテーション付き)
     async with Cookpad(country="JP", language="ja") as client:
-        planner = MealPlanner(cookpad=client)
+        planner = MealPlanner(
+            cookpad=client,
+            storage_locations=config.planner.storage_locations,
+        )
         plan = await planner.plan_daily(ingredients)
         print(plan.display())
+
+        # 買い物リスト
+        for item in plan.shopping_list():
+            print(f"  要購入: {item.name} {item.quantity} ({item.storage_location})")
+
+    # 4. PDF 出力 (オプション)
+    from cookpad.fridge.pdf import generate_pdf
+    generate_pdf(plan, "献立.pdf")
+
+    # 5. 印刷 (オプション)
+    from cookpad.fridge.printer import Printer
+    Printer.print_file("献立.pdf")
+
+    # 6. Google Drive アップロード (オプション)
+    from cookpad.fridge.gdrive import GoogleDriveUploader
+    uploader = GoogleDriveUploader()
+    file_id = uploader.upload("献立.pdf", filename="今日の献立.pdf")
 
 asyncio.run(main())
 ```
@@ -322,9 +437,25 @@ model_path = "/usr/share/hailo-models/yolov8s.hef"
 meals_per_day = 3
 recipes_per_meal = 3       # 主菜1 + 副菜2
 
+# カテゴリ別の保管場所をカスタマイズ
+# [planner.storage_locations]
+# 野菜 = "野菜室"
+# 肉 = "チルド室"
+# 卵 = "ドアポケット"
+
 [cookpad]
 country = "JP"
 language = "ja"
+
+[printer]
+enabled = false            # true で plan 時に自動印刷
+printer_name = ""          # 空ならデフォルトプリンタ
+
+[gdrive]
+enabled = false            # true で plan 時に自動アップロード
+credentials_path = "~/.config/cookpad/gdrive_credentials.json"
+token_path = "~/.config/cookpad/gdrive_token.json"
+folder_id = ""             # 空ならマイドライブ直下
 ```
 
 API キーは環境変数でも渡せる:
@@ -359,8 +490,11 @@ class MyBackend(VisionBackend):
 cookpad/fridge/
 ├── __init__.py      # 公開 API exports
 ├── camera.py        # FridgeCamera, CameraCapture
-├── config.py        # FridgeConfig, load_config
-├── planner.py       # MealPlanner, DailyMealPlan, Meal
+├── config.py        # FridgeConfig, PrinterConfig, GDriveConfig, load_config
+├── planner.py       # MealPlanner, DailyMealPlan, Meal, AnnotatedIngredient
+├── pdf.py           # generate_pdf (ReportLab PDF 生成)
+├── printer.py       # Printer (lpr 印刷)
+├── gdrive.py        # GoogleDriveUploader (Google Drive OAuth 2.0)
 ├── cli.py           # cookpad-fridge コマンド
 └── vision/
     ├── __init__.py  # VisionBackend (ABC), DetectedIngredient, create_backend

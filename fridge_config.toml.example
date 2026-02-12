@@ -24,7 +24,27 @@ model_path = "/usr/share/hailo-models/yolov8s.hef"
 meals_per_day = 3          # 1日の食事数 (1〜3)
 recipes_per_meal = 3       # 1食あたりのレシピ数 (主菜1 + 副菜)
 
+# カテゴリ別の保管場所 (カスタマイズ可能)
+# [planner.storage_locations]
+# 野菜 = "野菜室"
+# 果物 = "野菜室"
+# 肉 = "チルド室"
+# 魚 = "チルド室"
+# 乳製品 = "チルド室"
+# 卵 = "ドアポケット"
+# 調味料 = "ドアポケット"
+
 [cookpad]
 # token = "..."            # Cookpad APIトークン (オプショナル)
 country = "JP"
 language = "ja"
+
+[printer]
+enabled = false            # true にすると plan 時に自動印刷
+printer_name = ""          # 空の場合はデフォルトプリンタを使用
+
+[gdrive]
+enabled = false            # true にすると plan 時に自動アップロード
+credentials_path = "~/.config/cookpad/gdrive_credentials.json"
+token_path = "~/.config/cookpad/gdrive_token.json"
+folder_id = ""             # アップロード先フォルダID (空の場合はマイドライブ直下)
