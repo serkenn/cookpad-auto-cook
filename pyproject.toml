@@ -34,7 +34,7 @@ pdf = ["reportlab>=4.0"]
 gdrive = ["google-auth-oauthlib>=1.0", "google-api-python-client>=2.100"]
 iaeon = ["iaeon>=0.1", "apscheduler>=3.10"]
 scheduler = ["apscheduler>=3.10"]
-bypass-otp = ["bypass-otp-lib>=0.1"]
+bypass-otp = ["plusmsg-otp>=0.1"]
 full = ["cookpad[claude,pdf,gdrive,iaeon,scheduler]"]
 
 [project.scripts]

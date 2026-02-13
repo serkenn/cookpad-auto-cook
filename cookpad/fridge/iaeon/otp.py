@@ -35,18 +35,33 @@ class ManualOTPHandler(OTPHandler):
 
 
 class BypassOTPHandler(OTPHandler):
-    """Retrieves OTP automatically using the bypass-otp-lib library."""
+    """Retrieves OTP automatically using the plusmsg-otp library.
 
-    def __init__(self) -> None:
+    Connects to a +Message OTP relay running on an Android device.
+    """
+
+    def __init__(
+        self,
+        host: str = "192.168.1.1",
+        port: int = 8765,
+        otp_timeout: float = 120.0,
+    ) -> None:
         try:
-            import bypass_otp_lib  # noqa: F401
-
-            self._bypass = bypass_otp_lib
+            from plusmsg_otp import PlusMessageOTP  # type: ignore[import-untyped]
         except ImportError:
             raise ImportError(
-                "bypass-otp-lib が必要です: pip install 'cookpad[bypass-otp]'\n"
+                "plusmsg-otp が必要です: pip install plusmsg-otp\n"
                 "または手動OTPモード (otp_method = 'manual') を使用してください"
             )
+        self._client = PlusMessageOTP(host=host, port=port)
+        self._otp_timeout = otp_timeout
 
     async def get_otp_code(self, phone: str) -> str:
-        return self._bypass.get_otp(phone)
+        import asyncio
+
+        # Clear old OTPs, then wait for new one (sync→async via to_thread)
+        await asyncio.to_thread(self._client.clear)
+        code = await asyncio.to_thread(
+            self._client.wait_for_otp, self._otp_timeout
+        )
+        return code

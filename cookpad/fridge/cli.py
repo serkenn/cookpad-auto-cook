@@ -361,9 +361,10 @@ async def _cmd_iaeon_login(config) -> None:
             phone=phone,
             password=password,
             otp_method=config.iaeon.otp_method,
+            device_id=config.iaeon.device_id,
         )
         session = await auth.login()
-        print(f"ログイン成功 (User ID: {session.user_id})")
+        print(f"ログイン成功 (Device ID: {session.device_id or '自動生成'})")
         print("設定ファイルに phone と password を保存するか、")
         print("環境変数 IAEON_PHONE / IAEON_PASSWORD を設定してください。")
     except (ImportError, RuntimeError) as e:
@@ -386,6 +387,7 @@ async def _cmd_iaeon_fetch(config, args) -> None:
             phone=config.iaeon.phone,
             password=config.iaeon.password,
             otp_method=config.iaeon.otp_method,
+            device_id=config.iaeon.device_id,
         )
         session = await auth.login()
     except (ImportError, RuntimeError) as e:

@@ -94,6 +94,10 @@ class IAEONConfig:
     phone: str = ""
     password: str = ""
     otp_method: str = "manual"  # "manual" | "bypass"
+    device_id: str = ""
+    android_host: str = "192.168.1.1"
+    android_port: int = 8765
+    otp_timeout: float = 120.0
     fetch_schedule: str = "0 8 * * *"
     plan_schedule: str = "0 6 * * *"
     receipt_days: int = 7
@@ -229,6 +233,12 @@ def load_config(path: str | Path | None = None) -> FridgeConfig:
                 "IAEON_PASSWORD", ""
             ),
             otp_method=iaeon.get("otp_method", "manual"),
+            device_id=iaeon.get("device_id", "") or os.environ.get(
+                "IAEON_DEVICE_ID", ""
+            ),
+            android_host=iaeon.get("android_host", "192.168.1.1"),
+            android_port=iaeon.get("android_port", 8765),
+            otp_timeout=iaeon.get("otp_timeout", 120.0),
             fetch_schedule=iaeon.get("fetch_schedule", "0 8 * * *"),
             plan_schedule=iaeon.get("plan_schedule", "0 6 * * *"),
             receipt_days=iaeon.get("receipt_days", 7),

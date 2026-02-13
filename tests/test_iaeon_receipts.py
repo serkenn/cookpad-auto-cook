@@ -11,7 +11,7 @@ def fetcher():
     """Create a ReceiptFetcher with a dummy session."""
     from cookpad.fridge.iaeon.auth import IAEONSession
 
-    session = IAEONSession(access_token="dummy", user_id="test")
+    session = IAEONSession(access_token="dummy", device_id="test-device")
     return ReceiptFetcher(session)
 
 

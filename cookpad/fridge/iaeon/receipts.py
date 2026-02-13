@@ -15,6 +15,10 @@ _NON_FOOD_KEYWORDS: list[str] = [
     "洗剤", "シャンプー", "リンス", "ボディソープ", "歯磨",
     "ティッシュ", "トイレットペーパー", "ラップ", "アルミホイル",
     "ゴミ袋", "電池", "雑貨", "日用品", "文具",
+    "小計", "小　計", "合計", "支払", "残高", "お釣",
+    "税込", "税抜", "外税", "内税", "非課税",
+    "交通系", "WAON", "ワオン", "現金", "クレジット",
+    "お買上", "点数", "お預り", "IC",
 ]
 
 # AEON brand prefixes to strip
@@ -48,40 +52,71 @@ class ReceiptFetcher:
     async def fetch_recent_receipts(self, days: int = 7) -> list[ReceiptEntry]:
         """Fetch receipt data from the last N days.
 
+        Uses IAEONReceiptClient and parse_receipt from the iaeon library.
+
         Raises:
             ImportError: If the iaeon library is not installed.
         """
         try:
-            from iaeon import IAEONClient  # type: ignore[import-untyped]
+            from iaeon import IAEONReceiptClient  # type: ignore[import-untyped]
+            from iaeon.inventory import parse_receipt  # type: ignore[import-untyped]
         except ImportError:
             raise ImportError(
                 "iaeon ライブラリが必要です: pip install 'cookpad[iaeon]'"
             )
 
-        client = IAEONClient(access_token=self._session.access_token)
+        import asyncio
 
-        try:
-            raw_receipts = await client.get_receipts(days=days)
-        except Exception as e:
-            raise RuntimeError(f"レシート取得に失敗しました: {e}") from e
+        access_token = self._session.access_token
 
+        # 1. Get receipt_account_id
+        temp_client = IAEONReceiptClient(
+            access_token=access_token, receipt_account_id=""
+        )
+        info = await asyncio.to_thread(temp_client.get_user_receipt_info)
+        receipt_account_id = info.get("receipt_account_id", "")
+
+        # 2. Create authenticated receipt client
+        client = IAEONReceiptClient(
+            access_token=access_token,
+            receipt_account_id=receipt_account_id,
+        )
+        await asyncio.to_thread(client.auth_receipt)
+
+        # 3. List receipts for date range (YYYYMMDD format)
+        to_date = date.today().strftime("%Y%m%d")
+        from_date = (date.today() - timedelta(days=days)).strftime("%Y%m%d")
+        summaries = await asyncio.to_thread(
+            client.list_receipts, from_date, to_date
+        )
+
+        # 4. Fetch detail for each receipt and parse into entries
         entries: list[ReceiptEntry] = []
-        for receipt in raw_receipts:
-            receipt_id = receipt.get("receipt_id", "")
-            purchase_date = receipt.get("date", "")
-            store_name = receipt.get("store_name", "")
+        for summary in summaries:
+            detail = await asyncio.to_thread(
+                client.get_receipt_detail, summary.receipt_id
+            )
+            parsed = parse_receipt(detail, summary)
 
-            for item in receipt.get("items", []):
+            # purchased_at may be ISO datetime or compact YYYYMMDD...
+            raw_dt = parsed.purchased_at or ""
+            if "T" in raw_dt:
+                purchase_date = raw_dt[:10]  # "2026-02-12T..." → "2026-02-12"
+            elif len(raw_dt) >= 8 and raw_dt[:8].isdigit():
+                purchase_date = f"{raw_dt[:4]}-{raw_dt[4:6]}-{raw_dt[6:8]}"
+            else:
+                purchase_date = raw_dt[:10]
+
+            for product in parsed.products:
                 entries.append(
                     ReceiptEntry(
-                        product_name=item.get("name", ""),
-                        price=item.get("price", 0),
-                        quantity=item.get("quantity", 1),
-                        category=item.get("category", ""),
-                        receipt_id=receipt_id,
+                        product_name=product.name,
+                        price=product.price,
+                        quantity=product.quantity,
+                        receipt_id=parsed.receipt_id,
                         purchase_date=purchase_date,
-                        store_name=store_name,
-                        barcode=item.get("barcode", ""),
+                        store_name=parsed.store_name,
+                        barcode=product.barcode or "",
                     )
                 )
 

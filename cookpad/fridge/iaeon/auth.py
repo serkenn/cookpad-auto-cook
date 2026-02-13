@@ -13,7 +13,7 @@ class IAEONSession:
     """Holds an authenticated iAEON session."""
 
     access_token: str
-    user_id: str = ""
+    device_id: str = ""
     raw: Any = None
 
 
@@ -29,9 +29,11 @@ class IAEONAuthenticator:
         password: str,
         otp_handler: OTPHandler | None = None,
         otp_method: str = "manual",
+        device_id: str = "",
     ) -> None:
         self._phone = phone
         self._password = password
+        self._device_id = device_id
 
         if otp_handler is not None:
             self._otp_handler = otp_handler
@@ -42,6 +44,9 @@ class IAEONAuthenticator:
 
     async def login(self) -> IAEONSession:
         """Authenticate with iAEON and return a session.
+
+        Uses iaeon.IAEONAuth.full_login() which is a sync function.
+        The otp_provider callback bridges async OTPHandler → sync callback.
 
         Raises:
             ImportError: If the iaeon library is not installed.
@@ -55,25 +60,30 @@ class IAEONAuthenticator:
                 "iAEON連携を使用するには iaeon パッケージをインストールしてください"
             )
 
-        auth = IAEONAuth(phone=self._phone, password=self._password)
+        import asyncio
 
-        # Request OTP
+        auth = IAEONAuth(device_id=self._device_id or None)
+
+        # Bridge async OTPHandler to sync callback for full_login
+        otp_handler = self._otp_handler
+        phone = self._phone
+        loop = asyncio.get_running_loop()
+
+        def otp_provider() -> str:
+            future = asyncio.run_coroutine_threadsafe(
+                otp_handler.get_otp_code(phone), loop
+            )
+            return future.result(timeout=180)
+
         try:
-            await auth.request_otp()
+            access_token = await asyncio.to_thread(
+                auth.full_login, self._phone, self._password, otp_provider
+            )
         except Exception as e:
-            raise RuntimeError(f"OTP送信に失敗しました: {e}") from e
-
-        # Get OTP code
-        otp_code = await self._otp_handler.get_otp_code(self._phone)
-
-        # Verify OTP and get tokens
-        try:
-            result = await auth.verify_otp(otp_code)
-        except Exception as e:
-            raise RuntimeError(f"OTP検証に失敗しました: {e}") from e
+            raise RuntimeError(f"iAEON認証に失敗しました: {e}") from e
 
         return IAEONSession(
-            access_token=result.get("access_token", ""),
-            user_id=result.get("user_id", ""),
-            raw=result,
+            access_token=access_token,
+            device_id=self._device_id,
+            raw=auth,
         )
