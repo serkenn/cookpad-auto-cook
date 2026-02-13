@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .planner import DailyMealPlan
+
+if TYPE_CHECKING:
+    from .nutrition.calculator import DailyNutrition
 
 # Font search paths by platform
 _FONT_SEARCH_PATHS = [
@@ -52,12 +56,17 @@ def _register_japanese_font() -> str:
     return font_name
 
 
-def generate_pdf(plan: DailyMealPlan, output_path: str | Path) -> Path:
+def generate_pdf(
+    plan: DailyMealPlan,
+    output_path: str | Path,
+    daily_nutrition: DailyNutrition | None = None,
+) -> Path:
     """Generate a PDF file from a DailyMealPlan.
 
     Args:
         plan: The meal plan to render.
         output_path: Where to save the PDF file.
+        daily_nutrition: Optional nutrition data to include in the PDF.
 
     Returns:
         Path to the generated PDF file.
@@ -272,6 +281,91 @@ def generate_pdf(plan: DailyMealPlan, output_path: str | Path) -> Path:
         t = Table(table_data, colWidths=col_widths)
         t.setStyle(shopping_style)
         elements.append(t)
+
+    # Nutrition summary section
+    if daily_nutrition is not None:
+        elements.append(Spacer(1, 6 * mm))
+        elements.append(Paragraph("栄養バランス", heading_style))
+
+        dn = daily_nutrition
+        targets = dn.targets
+
+        # PFC ratio table
+        nutrition_data = [
+            ["栄養素", "摂取量", "目標", "達成率"],
+            [
+                "エネルギー",
+                f"{dn.total_energy:.0f} kcal",
+                f"{targets.energy_kcal:.0f} kcal",
+                f"{dn.total_energy / targets.energy_kcal * 100:.0f}%"
+                if targets.energy_kcal else "-",
+            ],
+            [
+                "たんぱく質",
+                f"{dn.total_protein:.1f} g",
+                f"{targets.protein_g:.1f} g",
+                f"{dn.total_protein / targets.protein_g * 100:.0f}%"
+                if targets.protein_g else "-",
+            ],
+            [
+                "脂質",
+                f"{dn.total_fat:.1f} g",
+                f"{targets.fat_g:.1f} g",
+                f"{dn.total_fat / targets.fat_g * 100:.0f}%"
+                if targets.fat_g else "-",
+            ],
+            [
+                "炭水化物",
+                f"{dn.total_carbs:.1f} g",
+                f"{targets.carb_g:.1f} g",
+                f"{dn.total_carbs / targets.carb_g * 100:.0f}%"
+                if targets.carb_g else "-",
+            ],
+            [
+                "食物繊維",
+                f"{dn.total_fiber:.1f} g",
+                f"{targets.fiber_min:.1f} g",
+                f"{dn.total_fiber / targets.fiber_min * 100:.0f}%"
+                if targets.fiber_min else "-",
+            ],
+            [
+                "食塩相当量",
+                f"{dn.total_salt:.1f} g",
+                f"{targets.salt_max:.1f} g 以下",
+                "OK" if dn.total_salt <= targets.salt_max else "超過",
+            ],
+        ]
+
+        nutrition_style = TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#27AE60")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, -1), font_name),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#E8F5E9")]),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ])
+
+        col_widths = [40 * mm, 35 * mm, 35 * mm, 30 * mm]
+        t = Table(nutrition_data, colWidths=col_widths)
+        t.setStyle(nutrition_style)
+        elements.append(t)
+
+        # Balance score
+        elements.append(Spacer(1, 3 * mm))
+        pfc_text = (
+            f"PFC比率: P{dn.protein_pct:.0f}% / "
+            f"F{dn.fat_pct:.0f}% / C{dn.carb_pct:.0f}%"
+            f"  |  バランススコア: {dn.balance_score:.2f}"
+        )
+        elements.append(Paragraph(pfc_text, body_style))
 
     doc.build(elements)
     return output_path

@@ -89,6 +89,34 @@ class CookpadConfig:
 
 
 @dataclass
+class IAEONConfig:
+    enabled: bool = False
+    phone: str = ""
+    password: str = ""
+    otp_method: str = "manual"  # "manual" | "bypass"
+    fetch_schedule: str = "0 8 * * *"
+    plan_schedule: str = "0 6 * * *"
+    receipt_days: int = 7
+
+
+@dataclass
+class DatabaseConfig:
+    path: str = "~/.config/cookpad/inventory.db"
+
+
+@dataclass
+class NutritionConfig:
+    enabled: bool = True
+    energy_target: float = 2000.0
+    protein_pct: float = 15.0
+    fat_pct: float = 25.0
+    carb_pct: float = 60.0
+    salt_max: float = 7.5
+    fiber_min: float = 21.0
+    prioritize_expiring: bool = True
+
+
+@dataclass
 class FridgeConfig:
     camera: CameraConfig = field(default_factory=CameraConfig)
     vision: VisionConfig = field(default_factory=VisionConfig)
@@ -96,6 +124,9 @@ class FridgeConfig:
     cookpad: CookpadConfig = field(default_factory=CookpadConfig)
     printer: PrinterConfig = field(default_factory=PrinterConfig)
     gdrive: GDriveConfig = field(default_factory=GDriveConfig)
+    iaeon: IAEONConfig = field(default_factory=IAEONConfig)
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    nutrition: NutritionConfig = field(default_factory=NutritionConfig)
 
 
 def load_config(path: str | Path | None = None) -> FridgeConfig:
@@ -122,6 +153,9 @@ def load_config(path: str | Path | None = None) -> FridgeConfig:
     cpd = raw.get("cookpad", {})
     prn = raw.get("printer", {})
     gdr = raw.get("gdrive", {})
+    iaeon = raw.get("iaeon", {})
+    db = raw.get("database", {})
+    nut = raw.get("nutrition", {})
 
     claude_cfg = vis.get("claude", {})
     gemini_cfg = vis.get("gemini", {})
@@ -187,5 +221,29 @@ def load_config(path: str | Path | None = None) -> FridgeConfig:
                 "~/.config/cookpad/gdrive_token.json",
             ),
             folder_id=gdr.get("folder_id", ""),
+        ),
+        iaeon=IAEONConfig(
+            enabled=iaeon.get("enabled", False),
+            phone=iaeon.get("phone", "") or os.environ.get("IAEON_PHONE", ""),
+            password=iaeon.get("password", "") or os.environ.get(
+                "IAEON_PASSWORD", ""
+            ),
+            otp_method=iaeon.get("otp_method", "manual"),
+            fetch_schedule=iaeon.get("fetch_schedule", "0 8 * * *"),
+            plan_schedule=iaeon.get("plan_schedule", "0 6 * * *"),
+            receipt_days=iaeon.get("receipt_days", 7),
+        ),
+        database=DatabaseConfig(
+            path=db.get("path", "~/.config/cookpad/inventory.db"),
+        ),
+        nutrition=NutritionConfig(
+            enabled=nut.get("enabled", True),
+            energy_target=nut.get("energy_target", 2000.0),
+            protein_pct=nut.get("protein_pct", 15.0),
+            fat_pct=nut.get("fat_pct", 25.0),
+            carb_pct=nut.get("carb_pct", 60.0),
+            salt_max=nut.get("salt_max", 7.5),
+            fiber_min=nut.get("fiber_min", 21.0),
+            prioritize_expiring=nut.get("prioritize_expiring", True),
         ),
     )

@@ -19,6 +19,12 @@ pip install cookpad[ai-hat]    # Raspberry Pi AI HAT (オフライン)
 # オプション機能
 pip install cookpad[pdf]       # PDF 献立表出力
 pip install cookpad[gdrive]    # Google Drive アップロード
+pip install cookpad[iaeon]     # iAEON レシート連携 + スケジューラー
+pip install cookpad[scheduler] # スケジューラーのみ
+pip install cookpad[bypass-otp] # OTP 自動取得
+
+# 全部入り
+pip install cookpad[full]
 ```
 
 ## 使い方
@@ -195,18 +201,36 @@ except CookpadError as e:
 冷蔵庫に USB カメラを設置し、AI 画像認識で食材を検出して 1 日 3 食の献立を自動提案する。
 各レシピの材料・手順を取得し、冷蔵庫にある食材と要購入食材を判別。PDF 出力・印刷・Google Drive アップロードにも対応。
 
+**iAEON 連携**により、スーパーのレシート情報から食材を自動登録し、**栄養バランスを考慮した献立**を自動生成することもできる。
+
 ### アーキテクチャ
 
 ```
-USB カメラ → 撮影 → AI Vision で食材検出 → Cookpad 検索 → レシピ詳細取得 → 献立表
-              │           │                       │               │
-          camera.py   vision/              planner.py         planner.py
-                    (claude / gemini / ai_hat)        (材料アノテーション)
-                                                            │
-                                              ┌─────────────┼─────────────┐
-                                              ↓             ↓             ↓
-                                           pdf.py      printer.py    gdrive.py
-                                          (PDF生成)     (lpr印刷)   (Drive保存)
+入力ソース                        処理パイプライン                    出力
+──────────                        ────────────                    ────
+
+USB カメラ → 撮影 → AI Vision     ┐
+             camera.py  vision/   │
+                                  ├→ 食材リスト → Cookpad検索 → 献立表 → PDF/印刷/Drive
+iAEON レシート → 食品抽出         │   planner.py                 │
+             iaeon/               ┘                               │
+                                                           栄養バランス計算
+                                                           nutrition/
+                                                                  │
+                                                        ┌─────────┼─────────┐
+                                                        ↓         ↓         ↓
+                                                     pdf.py   printer.py  gdrive.py
+                                                    (PDF生成)  (lpr印刷)  (Drive保存)
+
+データ永続化: db/ (SQLite)
+  - 食品在庫テーブル (food_inventory)
+  - 栄養キャッシュ (nutrition_cache)
+  - 献立履歴 (meal_plan_history)
+
+スケジューラー: scheduler.py (APScheduler cron)
+  - レシート定期取得
+  - 献立定期生成
+  - 期限切れチェック
 ```
 
 ### クイックスタート
@@ -220,7 +244,9 @@ cp fridge_config.toml.example fridge_config.toml
 # エディタで API キーなどを設定
 ```
 
-### CLI
+### CLI コマンド一覧
+
+#### カメラベースのフロー (従来)
 
 ```bash
 # 利用可能なカメラ一覧
@@ -252,7 +278,49 @@ cookpad-fridge plan --image 冷蔵庫.jpg --pdf 献立.pdf --print --drive
 cookpad-fridge --config my_config.toml plan
 ```
 
-出力例:
+#### iAEON 連携フロー (新機能)
+
+```bash
+# iAEON ログイン (初回セットアップ)
+cookpad-fridge iaeon-login
+
+# レシート手動取得 → 食品を DB に登録
+cookpad-fridge iaeon-fetch              # 過去7日分
+cookpad-fridge iaeon-fetch --days 14    # 過去14日分
+
+# 食品在庫を表示
+cookpad-fridge inventory                # 全在庫
+cookpad-fridge inventory --expiring     # 期限切れ間近のみ
+cookpad-fridge inventory --json         # JSON 出力
+```
+
+#### 栄養バランス献立 (新機能)
+
+```bash
+# DB の在庫から栄養バランスを考慮した献立を生成
+cookpad-fridge nutrition-plan
+cookpad-fridge nutrition-plan --json                # JSON 出力
+cookpad-fridge nutrition-plan --pdf 献立.pdf        # PDF 保存
+cookpad-fridge nutrition-plan --pdf 献立.pdf --drive  # PDF + Drive
+
+# 食品栄養情報を検索 (MEXT 日本食品標準成分表)
+cookpad-fridge nutrition-lookup トマト
+cookpad-fridge nutrition-lookup 鶏もも肉
+```
+
+#### スケジューラー (新機能)
+
+```bash
+# スケジューラーを起動 (cron で定期実行)
+cookpad-fridge schedule start
+
+# ジョブ登録状況を確認
+cookpad-fridge schedule status
+```
+
+### 出力例
+
+#### 通常の献立表
 
 ```
 📅 2025-01-15 の献立
@@ -280,30 +348,141 @@ cookpad-fridge --config my_config.toml plan
   【副菜1】トマトサラダ
 
 ──────────────────────────────────────────────────
-🍽  夕食
-
-  【主菜】チキンのトマト煮込み
-         調理時間: 40分
-  ...
-
-──────────────────────────────────────────────────
 🛒 買い物リスト
 
     食材名     分量       保存場所
     ──────────────────────────────
     牛乳       大さじ2    チルド室
     バター     10g        チルド室
-    塩         少々       ドアポケット
+```
+
+#### 栄養バランス付き献立表 (`nutrition-plan`)
+
+```
+📅 2025-01-15 の献立
+🥬 検出食材: トマト, 鶏もも肉, 卵, たまねぎ
+
+  ... (献立詳細) ...
+
+──────────────────────────────────────────────────
+栄養バランス
+
+  栄養素     摂取量     目標       達成率
+  ────────────────────────────────────────────
+  エネルギー 1856kcal   2000kcal   93%
+  たんぱく質 72.3g      75.0g      96%
+  脂質       48.1g      55.6g      87%
+  炭水化物   268.5g     300.0g     90%
+  食物繊維   18.2g      21.0g      87%
+  食塩相当量 6.8g       7.5g以下   91%
+
+  PFC比率: P16% / F23% / C58%
+  バランススコア: 0.92
+```
+
+### iAEON 連携
+
+iAEON アプリの購入履歴からレシート情報を取得し、購入した食品を自動で在庫管理する。
+
+#### セットアップ
+
+1. `pip install cookpad[iaeon]`
+2. 設定ファイルに iAEON の認証情報を追加:
+
+```toml
+[iaeon]
+enabled = true
+phone = "090-1234-5678"     # または環境変数 IAEON_PHONE
+password = "your_password"  # または環境変数 IAEON_PASSWORD
+otp_method = "manual"       # "manual" (手動入力) | "bypass" (自動)
+```
+
+3. 初回ログイン: `cookpad-fridge iaeon-login`
+
+#### フロー
+
+```
+iAEON レシート取得 → 商品名正規化 → 食品フィルタ → 期限推定 → SQLite 保存
+                     (TV/BP除去)    (日用品除外)    (カテゴリ別)
+```
+
+商品名正規化:
+- AEON ブランド接頭辞 (TV, BP, トップバリュ) を除去
+- 数量/重量ラベル (300g, 3個入) を除去
+- 産地ラベル (北海道産, 国産) を除去
+
+賞味期限推定:
+| カテゴリ | 推定日数 |
+|---|---|
+| 肉・魚 | +3日 |
+| 野菜・果物 | +7日 |
+| 乳製品 | +10日 |
+| 卵 | +14日 |
+| 穀物 | +30日 |
+| 調味料 | +180日 |
+
+### 栄養バランス計算
+
+日本食品標準成分表 (MEXT 2020年版八訂) をベースに、レシピの栄養価を計算する。
+
+#### 機能
+
+- **レシピ栄養計算**: 材料名を MEXT データベースと照合し、エネルギー・PFC・食物繊維・食塩相当量等を算出
+- **PFC バランススコア**: たんぱく質(P)・脂質(F)・炭水化物(C) の比率が目標にどれだけ近いかを 0.0〜1.0 で評価
+- **日本語調理単位変換**: 大さじ/小さじ/カップ/合/個/本/枚 などをグラムに変換
+- **食品別重量テーブル**: 卵1個=60g, トマト1個=150g, 鶏もも肉1枚=250g など
+
+#### 栄養目標のデフォルト値
+
+| 項目 | デフォルト | 根拠 |
+|---|---|---|
+| エネルギー | 2000 kcal | 日本人の食事摂取基準 |
+| たんぱく質 | 15% | 推奨 PFC 比率 |
+| 脂質 | 25% | 推奨 PFC 比率 |
+| 炭水化物 | 60% | 推奨 PFC 比率 |
+| 食塩相当量 | 7.5g 以下 | 厚生労働省目標値 |
+| 食物繊維 | 21g 以上 | 厚生労働省目標値 |
+
+設定ファイルでカスタマイズ可能:
+
+```toml
+[nutrition]
+enabled = true
+energy_target = 1800     # 目標エネルギー (kcal)
+protein_pct = 20         # たんぱく質比率 (%)
+fat_pct = 20             # 脂質比率 (%)
+carb_pct = 60            # 炭水化物比率 (%)
+salt_max = 6.0           # 食塩上限 (g)
+fiber_min = 25           # 食物繊維下限 (g)
+prioritize_expiring = true
+```
+
+### スケジューラー
+
+APScheduler で cron ベースの定期実行を行う。
+
+| ジョブ | デフォルトスケジュール | 処理内容 |
+|---|---|---|
+| レシート取得 | 毎日 8:00 | iAEON → レシート取得 → 食品 DB 登録 |
+| 献立生成 | 毎日 6:00 | 在庫 → 栄養バランス献立 → PDF → Google Drive |
+| 期限切れチェック | 毎日 0:00 | 期限切れ食品のステータス更新 |
+
+```toml
+[iaeon]
+fetch_schedule = "0 8 * * *"   # cron式
+plan_schedule = "0 6 * * *"
 ```
 
 ### PDF 出力
 
 `--pdf` で献立表を PDF ファイルに保存できる。A4 レイアウトで材料テーブル・手順・買い物リスト付き。
+`nutrition-plan` の場合は栄養バランスサマリー (PFC テーブル + スコア) も付く。
 
 ```bash
 pip install cookpad[pdf]  # reportlab が必要
 
 cookpad-fridge plan --pdf 献立.pdf
+cookpad-fridge nutrition-plan --pdf 献立.pdf
 ```
 
 日本語フォント (`fonts-noto-cjk` など) が必要:
@@ -358,12 +537,15 @@ from cookpad import Cookpad
 from cookpad.fridge import (
     FridgeCamera,
     MealPlanner,
+    NutritionAwareMealPlanner,
     create_backend,
     load_config,
 )
 
 async def main():
     config = load_config("fridge_config.toml")
+
+    # === カメラベースのフロー ===
 
     # 1. 撮影
     camera = FridgeCamera(
@@ -380,7 +562,7 @@ async def main():
     for ing in ingredients:
         print(f"{ing.name} ({ing.confidence:.0%}) [{ing.category}]")
 
-    # 3. 献立提案 (レシピ詳細・材料アノテーション付き)
+    # 3. 献立提案
     async with Cookpad(country="JP", language="ja") as client:
         planner = MealPlanner(
             cookpad=client,
@@ -397,21 +579,61 @@ async def main():
     from cookpad.fridge.pdf import generate_pdf
     generate_pdf(plan, "献立.pdf")
 
-    # 5. 印刷 (オプション)
-    from cookpad.fridge.printer import Printer
-    Printer.print_file("献立.pdf")
+    # === iAEON + 栄養バランスのフロー ===
 
-    # 6. Google Drive アップロード (オプション)
-    from cookpad.fridge.gdrive import GoogleDriveUploader
-    uploader = GoogleDriveUploader()
-    file_id = uploader.upload("献立.pdf", filename="今日の献立.pdf")
+    # 1. iAEON レシートから在庫取得
+    from cookpad.fridge.db import InventoryDB
+    db = InventoryDB(config.database.path)
+    ingredients = db.get_inventory_as_ingredients()
+
+    # 2. 栄養バランス献立生成
+    from cookpad.fridge.nutrition import NutritionTargets
+    targets = NutritionTargets(energy_kcal=2000)
+
+    async with Cookpad(country="JP", language="ja") as client:
+        planner = NutritionAwareMealPlanner(
+            cookpad=client,
+            nutrition_targets=targets,
+        )
+        plan = await planner.plan_daily_balanced(ingredients=ingredients)
+        print(plan.display())  # 栄養バランスセクション付き
+
+    # 3. 栄養付き PDF
+    generate_pdf(plan, "献立.pdf", daily_nutrition=plan.daily_nutrition)
+
+    # === 栄養情報の直接検索 ===
+
+    from cookpad.fridge.nutrition import MEXTDatabase
+    mext = MEXTDatabase.instance()
+    info = mext.lookup_by_name("トマト")
+    if info:
+        print(f"{info.name}: {info.energy_kcal}kcal, P{info.protein}g, F{info.fat}g, C{info.carbohydrate}g")
 
 asyncio.run(main())
 ```
 
+### Vision バックエンド
+
+| バックエンド | SDK | 特徴 |
+|---|---|---|
+| `claude` | `anthropic` | 高精度。日本の食材に強い |
+| `gemini` | `google-generativeai` | 高速。無料枠あり |
+| `ai_hat` | `hailort` | Raspberry Pi でオフライン動作。YOLO ベース |
+
+自作バックエンドも作れる:
+
+```python
+from cookpad.fridge import VisionBackend, DetectedIngredient
+
+class MyBackend(VisionBackend):
+    async def detect_ingredients(self, image_paths: list[str]) -> list[DetectedIngredient]:
+        # 独自の検出ロジック
+        return [DetectedIngredient(name="トマト", confidence=0.9, category="野菜")]
+```
+
 ### 設定ファイル
 
-`fridge_config.toml` で動作をカスタマイズできる。
+`fridge_config.toml` で動作をカスタマイズできる。全セクションはオプショナルで、未指定の場合はデフォルト値が使われる。
 
 ```toml
 [camera]
@@ -456,6 +678,28 @@ enabled = false            # true で plan 時に自動アップロード
 credentials_path = "~/.config/cookpad/gdrive_credentials.json"
 token_path = "~/.config/cookpad/gdrive_token.json"
 folder_id = ""             # 空ならマイドライブ直下
+
+[iaeon]
+enabled = false            # true で iAEON 連携を有効化
+phone = ""                 # 空なら IAEON_PHONE 環境変数
+password = ""              # 空なら IAEON_PASSWORD 環境変数
+otp_method = "manual"      # "manual" | "bypass"
+fetch_schedule = "0 8 * * *"   # レシート取得 cron 式
+plan_schedule = "0 6 * * *"    # 献立生成 cron 式
+receipt_days = 7
+
+[database]
+path = "~/.config/cookpad/inventory.db"
+
+[nutrition]
+enabled = true
+energy_target = 2000       # 目標エネルギー (kcal)
+protein_pct = 15           # たんぱく質比率 (%)
+fat_pct = 25               # 脂質比率 (%)
+carb_pct = 60              # 炭水化物比率 (%)
+salt_max = 7.5             # 食塩上限 (g)
+fiber_min = 21             # 食物繊維下限 (g)
+prioritize_expiring = true # 期限切れ間近の食品を優先
 ```
 
 API キーは環境変数でも渡せる:
@@ -463,44 +707,80 @@ API キーは環境変数でも渡せる:
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 export GEMINI_API_KEY="AI..."
+export IAEON_PHONE="090-1234-5678"
+export IAEON_PASSWORD="your_password"
 ```
 
-### Vision バックエンド
+### データベース
 
-| バックエンド | SDK | 特徴 |
-|---|---|---|
-| `claude` | `anthropic` | 高精度。日本の食材に強い |
-| `gemini` | `google-generativeai` | 高速。無料枠あり |
-| `ai_hat` | `hailort` | Raspberry Pi でオフライン動作。YOLO ベース |
+SQLite (`~/.config/cookpad/inventory.db`) に以下のテーブルを自動作成:
 
-自作バックエンドも作れる:
-
-```python
-from cookpad.fridge import VisionBackend, DetectedIngredient
-
-class MyBackend(VisionBackend):
-    async def detect_ingredients(self, image_paths: list[str]) -> list[DetectedIngredient]:
-        # 独自の検出ロジック
-        return [DetectedIngredient(name="トマト", confidence=0.9, category="野菜")]
-```
+| テーブル | 用途 |
+|---|---|
+| `food_inventory` | iAEON から取得した食品在庫 (名前, カテゴリ, 数量, 期限, 価格, ステータス) |
+| `nutrition_cache` | MEXT 栄養情報の検索キャッシュ |
+| `meal_plan_history` | 生成済み献立の履歴 (日付, 栄養情報, PDF パス, Drive ID) |
 
 ### モジュール構成
 
 ```
-cookpad/fridge/
-├── __init__.py      # 公開 API exports
-├── camera.py        # FridgeCamera, CameraCapture
-├── config.py        # FridgeConfig, PrinterConfig, GDriveConfig, load_config
-├── planner.py       # MealPlanner, DailyMealPlan, Meal, AnnotatedIngredient
-├── pdf.py           # generate_pdf (ReportLab PDF 生成)
-├── printer.py       # Printer (lpr 印刷)
-├── gdrive.py        # GoogleDriveUploader (Google Drive OAuth 2.0)
-├── cli.py           # cookpad-fridge コマンド
-└── vision/
-    ├── __init__.py  # VisionBackend (ABC), DetectedIngredient, create_backend
-    ├── claude.py    # Claude Vision バックエンド
-    ├── gemini.py    # Gemini Vision バックエンド
-    └── ai_hat.py    # Raspberry Pi AI HAT バックエンド
+cookpad/
+├── __init__.py          # Cookpad API クライアント公開 API
+├── client.py            # Cookpad 非同期 HTTP クライアント
+├── types.py             # Recipe, Ingredient, Step 等のデータ型
+├── constants.py         # API ベース URL, デフォルトトークン
+├── exceptions.py        # CookpadError, NotFoundError 等
+└── fridge/              # 冷蔵庫スマート献立モジュール
+    ├── __init__.py      # 公開 API exports
+    ├── config.py        # FridgeConfig, IAEONConfig, NutritionConfig, load_config
+    ├── camera.py        # FridgeCamera, CameraCapture
+    ├── planner.py       # MealPlanner, NutritionAwareMealPlanner, DailyMealPlan
+    ├── pdf.py           # generate_pdf (ReportLab PDF 生成, 栄養セクション対応)
+    ├── printer.py       # Printer (lpr 印刷)
+    ├── gdrive.py        # GoogleDriveUploader (Google Drive OAuth 2.0)
+    ├── scheduler.py     # MealPlanScheduler (APScheduler cron ジョブ)
+    ├── cli.py           # cookpad-fridge コマンド (12 サブコマンド)
+    ├── vision/          # AI 画像認識バックエンド
+    │   ├── __init__.py  # VisionBackend (ABC), DetectedIngredient, create_backend
+    │   ├── claude.py    # Claude Vision バックエンド
+    │   ├── gemini.py    # Gemini Vision バックエンド
+    │   └── ai_hat.py    # Raspberry Pi AI HAT バックエンド
+    ├── iaeon/           # iAEON レシート連携
+    │   ├── __init__.py
+    │   ├── models.py    # ReceiptEntry, FoodItem データクラス
+    │   ├── otp.py       # OTPHandler (Manual / Bypass)
+    │   ├── auth.py      # IAEONAuthenticator (ログイン・OTP 処理)
+    │   └── receipts.py  # ReceiptFetcher (レシート取得・商品名正規化・期限推定)
+    ├── nutrition/       # 栄養バランス計算
+    │   ├── __init__.py
+    │   ├── mext_data.py # MEXTDatabase (日本食品標準成分表, シングルトン)
+    │   ├── units.py     # parse_quantity, to_grams (日本語調理単位変換)
+    │   ├── calculator.py # NutritionCalculator, NutritionTargets, DailyNutrition
+    │   └── data/
+    │       └── mext_2020_v8.json  # 成分表バンドルデータ (60+ 食品)
+    └── db/              # SQLite データベース
+        ├── __init__.py
+        ├── schema.py    # DDL 定義・スキーマ管理
+        ├── inventory.py # InventoryDB (食品在庫 CRUD)
+        ├── nutrition_cache.py  # NutritionCacheDB
+        └── meal_history.py     # MealHistoryDB (献立履歴)
+```
+
+### テスト
+
+```bash
+pip install pytest pytest-asyncio
+
+# 全テスト実行
+pytest tests/ -v
+
+# モジュール別
+pytest tests/test_db_schema.py tests/test_db_inventory.py -v     # DB
+pytest tests/test_nutrition_units.py tests/test_nutrition_mext.py tests/test_nutrition_calculator.py -v  # 栄養
+pytest tests/test_iaeon_receipts.py tests/test_iaeon_auth.py -v  # iAEON
+pytest tests/test_planner_nutrition.py -v                        # 栄養プランナー
+pytest tests/test_config_iaeon.py -v                             # 設定
+pytest tests/test_scheduler.py -v                                # スケジューラー
 ```
 
 ## ライセンス

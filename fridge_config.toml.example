@@ -48,3 +48,25 @@ enabled = false            # true にすると plan 時に自動アップロー�
 credentials_path = "~/.config/cookpad/gdrive_credentials.json"
 token_path = "~/.config/cookpad/gdrive_token.json"
 folder_id = ""             # アップロード先フォルダID (空の場合はマイドライブ直下)
+
+[iaeon]
+enabled = false            # true にすると iAEON連携を有効化
+phone = ""                 # 空の場合は IAEON_PHONE 環境変数を使用
+password = ""              # 空の場合は IAEON_PASSWORD 環境変数を使用
+otp_method = "manual"      # "manual" (手動入力) | "bypass" (自動取得)
+fetch_schedule = "0 8 * * *"   # レシート取得スケジュール (cron式)
+plan_schedule = "0 6 * * *"    # 献立生成スケジュール (cron式)
+receipt_days = 7           # 取得するレシートの日数
+
+[database]
+path = "~/.config/cookpad/inventory.db"
+
+[nutrition]
+enabled = true             # 栄養バランス計算を有効化
+energy_target = 2000       # 目標エネルギー (kcal)
+protein_pct = 15           # たんぱく質 目標比率 (%)
+fat_pct = 25               # 脂質 目標比率 (%)
+carb_pct = 60              # 炭水化物 目標比率 (%)
+salt_max = 7.5             # 食塩相当量 上限 (g)
+fiber_min = 21             # 食物繊維 最低摂取量 (g)
+prioritize_expiring = true # 期限切れ間近の食品を優先

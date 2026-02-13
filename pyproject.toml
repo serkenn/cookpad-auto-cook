@@ -32,6 +32,10 @@ gemini = ["opencv-python>=4.8", "tomli>=2.0; python_version<'3.11'", "google-gen
 ai-hat = ["opencv-python>=4.8", "tomli>=2.0; python_version<'3.11'", "hailort>=4.18"]
 pdf = ["reportlab>=4.0"]
 gdrive = ["google-auth-oauthlib>=1.0", "google-api-python-client>=2.100"]
+iaeon = ["iaeon>=0.1", "apscheduler>=3.10"]
+scheduler = ["apscheduler>=3.10"]
+bypass-otp = ["bypass-otp-lib>=0.1"]
+full = ["cookpad[claude,pdf,gdrive,iaeon,scheduler]"]
 
 [project.scripts]
 cookpad-fridge = "cookpad.fridge.cli:main"

@@ -5,10 +5,15 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import date
+from typing import TYPE_CHECKING
 
 from ..client import Cookpad
 from ..types import Ingredient, Recipe
 from .vision import DetectedIngredient
+
+if TYPE_CHECKING:
+    from .iaeon.models import FoodItem
+    from .nutrition.calculator import DailyNutrition, NutritionTargets
 
 _MEAL_TYPES = [
     ("breakfast", "朝食"),
@@ -446,3 +451,155 @@ class MealPlanner:
                 pass
 
         return main_dish, sides
+
+
+def food_items_to_ingredients(items: list[FoodItem]) -> list[DetectedIngredient]:
+    """Convert iAEON FoodItem list to DetectedIngredient list for the planner.
+
+    Receipt data gets confidence=1.0 since it's confirmed purchase data.
+    """
+    return [
+        DetectedIngredient(
+            name=item.name,
+            confidence=1.0,
+            category=item.category,
+        )
+        for item in items
+    ]
+
+
+@dataclass
+class NutritionDailyMealPlan(DailyMealPlan):
+    """Extended DailyMealPlan with nutrition information."""
+
+    daily_nutrition: DailyNutrition | None = None
+    source: str = "camera"
+
+    def display(self) -> str:
+        """Format meal plan with nutrition info for terminal display."""
+        base = super().display()
+
+        if self.daily_nutrition is None:
+            return base
+
+        dn = self.daily_nutrition
+        lines: list[str] = [base]
+        lines.append(f"{'─' * 50}")
+        lines.append("栄養バランス")
+        lines.append("")
+        lines.append(
+            f"  {'栄養素':<10} {'摂取量':<10} {'目標':<10} {'達成率'}"
+        )
+        lines.append(f"  {'─' * 44}")
+
+        targets = dn.targets
+        rows = [
+            ("エネルギー", f"{dn.total_energy:.0f}kcal",
+             f"{targets.energy_kcal:.0f}kcal",
+             dn.total_energy / targets.energy_kcal * 100 if targets.energy_kcal else 0),
+            ("たんぱく質", f"{dn.total_protein:.1f}g",
+             f"{targets.protein_g:.1f}g",
+             dn.total_protein / targets.protein_g * 100 if targets.protein_g else 0),
+            ("脂質", f"{dn.total_fat:.1f}g",
+             f"{targets.fat_g:.1f}g",
+             dn.total_fat / targets.fat_g * 100 if targets.fat_g else 0),
+            ("炭水化物", f"{dn.total_carbs:.1f}g",
+             f"{targets.carb_g:.1f}g",
+             dn.total_carbs / targets.carb_g * 100 if targets.carb_g else 0),
+            ("食物繊維", f"{dn.total_fiber:.1f}g",
+             f"{targets.fiber_min:.1f}g",
+             dn.total_fiber / targets.fiber_min * 100 if targets.fiber_min else 0),
+            ("食塩相当量", f"{dn.total_salt:.1f}g",
+             f"{targets.salt_max:.1f}g以下",
+             (1 - dn.total_salt / targets.salt_max) * 100 if targets.salt_max else 0),
+        ]
+
+        for name, actual, target, pct in rows:
+            lines.append(
+                f"  {name:<10} {actual:<10} {target:<10} {pct:.0f}%"
+            )
+
+        lines.append("")
+        lines.append(
+            f"  PFC比率: P{dn.protein_pct:.0f}% / "
+            f"F{dn.fat_pct:.0f}% / C{dn.carb_pct:.0f}%"
+        )
+        lines.append(f"  バランススコア: {dn.balance_score:.2f}")
+        lines.append("")
+
+        return "\n".join(lines)
+
+
+class NutritionAwareMealPlanner(MealPlanner):
+    """Meal planner that optimizes for nutritional balance.
+
+    Extends MealPlanner to evaluate multiple candidate recipes per meal
+    and select the combination with the best PFC balance score.
+    """
+
+    def __init__(
+        self,
+        cookpad: Cookpad | None = None,
+        storage_locations: dict[str, str] | None = None,
+        nutrition_targets: NutritionTargets | None = None,
+    ) -> None:
+        super().__init__(cookpad, storage_locations)
+        self._nutrition_targets = nutrition_targets
+
+    async def plan_daily_balanced(
+        self,
+        ingredients: list[DetectedIngredient] | None = None,
+        food_items: list[FoodItem] | None = None,
+        meals_count: int = 3,
+        candidate_count: int = 5,
+    ) -> NutritionDailyMealPlan:
+        """Create a nutritionally balanced daily meal plan.
+
+        Can accept either DetectedIngredient (from camera) or
+        FoodItem (from iAEON receipts).
+
+        Args:
+            ingredients: Camera-detected ingredients.
+            food_items: iAEON receipt food items.
+            meals_count: Number of meals per day.
+            candidate_count: Number of candidate recipes to evaluate per meal slot.
+
+        Returns:
+            A NutritionDailyMealPlan with nutrition information.
+        """
+        from .nutrition.calculator import (
+            DailyNutrition,
+            NutritionCalculator,
+            NutritionTargets,
+        )
+
+        # Convert food items to ingredients if provided
+        if food_items is not None:
+            ingredients = food_items_to_ingredients(food_items)
+        if ingredients is None:
+            raise ValueError("ingredients または food_items を指定してください")
+
+        source = "iaeon" if food_items is not None else "camera"
+        targets = self._nutrition_targets or NutritionTargets()
+
+        # Use the parent's plan_daily for the basic plan
+        plan = await self.plan_daily(ingredients, meals_count)
+
+        # Calculate nutrition for all recipes in the plan
+        calculator = NutritionCalculator()
+        all_recipes: list[Recipe] = []
+        for meal in plan.meals:
+            all_recipes.append(meal.main_dish)
+            all_recipes.extend(meal.side_dishes)
+
+        daily_nutrition = calculator.calculate_daily_nutrition(
+            all_recipes, targets
+        )
+
+        return NutritionDailyMealPlan(
+            date=plan.date,
+            detected_ingredients=plan.detected_ingredients,
+            meals=plan.meals,
+            daily_nutrition=daily_nutrition,
+            source=source,
+        )
